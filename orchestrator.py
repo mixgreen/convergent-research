@@ -359,26 +359,48 @@ class ResearchOrchestrator:
         for report_path in comparison_reports.values():
             with open(report_path, 'r', encoding='utf-8') as f:
                 content = f.read()
-                # 简单提取：查找 "## 5. 统一参考资料清单" 章节
-                if "## 5. 统一参考资料清单" in content:
-                    section = content.split("## 5. 统一参考资料清单")[1]
-                    section = section.split("##")[0]  # 到下一个章节为止
+                # 尝试多种章节标题格式
+                section_markers = [
+                    "## 5. 统一参考资料清单",
+                    "## 统一参考资料清单",
+                    "## 5. 参考资料",
+                    "## 参考资料"
+                ]
+
+                section = None
+                for marker in section_markers:
+                    if marker in content:
+                        section = content.split(marker)[1]
+                        section = section.split("##")[0]  # 到下一个章节为止
+                        break
+
+                if section:
                     # 提取列表项
                     for line in section.split('\n'):
                         line = line.strip()
                         if line.startswith('-') or line.startswith('*'):
-                            all_refs.add(line[1:].strip())
+                            ref = line[1:].strip()
+                            # 过滤掉空行和分隔符
+                            if ref and ref not in ['--', '---', '...']:
+                                all_refs.add(ref)
 
         # 保存统一参考资料
         refs_path = self.output_dir / "round_02" / "unified_references.md"
         with open(refs_path, 'w', encoding='utf-8') as f:
             f.write("# 统一参考资料清单\n\n")
             f.write("（从第 2 轮对比报告中提取，供后续轮次使用）\n\n")
-            for ref in sorted(all_refs):
-                f.write(f"- {ref}\n")
+            if all_refs:
+                for ref in sorted(all_refs):
+                    f.write(f"- {ref}\n")
+            else:
+                f.write("（本轮未提取到参考资料，可能是纯理论问题或 agent 未在对比报告中列出参考资料）\n")
 
         self.unified_references = refs_path.read_text(encoding='utf-8')
-        print(f"   ✅ 提取了 {len(all_refs)} 条参考资料")
+
+        if all_refs:
+            print(f"   ✅ 提取了 {len(all_refs)} 条参考资料")
+        else:
+            print(f"   ⚠️  未提取到参考资料（可能是纯理论问题）")
 
     def _evaluate_convergence(self, round_num: int,
                              comparison_reports: Dict[str, Path]) -> Dict:
