@@ -34,7 +34,7 @@ agents:
 
 # 执行配置
 execution:
-  parallel: true          # 是否并行执行多个 agent
+  parallel: true          # 并行执行所有 agent（推荐，可节省 ~40% 时间）
   timeout: 600            # 单个 agent 超时时间（秒）
   max_retries: 2          # 失败重试次数
 

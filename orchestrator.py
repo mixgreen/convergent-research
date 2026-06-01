@@ -199,10 +199,12 @@ class ResearchOrchestrator:
                        phase: str) -> Dict[str, Path]:
         """并行或串行执行所有 agent"""
         reports = {}
+        total_agents = len(self.agents)
 
         if self.exec_config['parallel']:
             # 并行执行
-            with ThreadPoolExecutor(max_workers=len(self.agents)) as executor:
+            print(f"   🚀 并行启动 {total_agents} 个 agent...")
+            with ThreadPoolExecutor(max_workers=total_agents) as executor:
                 futures = {}
                 for agent_name in self.agents.keys():
                     output_path = output_dir / f"{agent_name}_{phase}.md" if phase != "research" else output_dir / f"{agent_name}.md"
@@ -211,24 +213,27 @@ class ResearchOrchestrator:
                     )
                     futures[future] = (agent_name, output_path)
 
+                completed = 0
                 for future in as_completed(futures):
                     agent_name, output_path = futures[future]
                     try:
                         future.result()
                         reports[agent_name] = output_path
-                        print(f"   ✅ {agent_name} 完成")
+                        completed += 1
+                        print(f"   ✅ {agent_name} 完成 ({completed}/{total_agents})")
                     except Exception as e:
-                        print(f"   ❌ {agent_name} 失败: {e}")
+                        completed += 1
+                        print(f"   ❌ {agent_name} 失败 ({completed}/{total_agents}): {e}")
         else:
             # 串行执行
-            for agent_name in self.agents.keys():
+            for idx, agent_name in enumerate(self.agents.keys(), 1):
                 output_path = output_dir / f"{agent_name}_{phase}.md" if phase != "research" else output_dir / f"{agent_name}.md"
                 try:
                     self._execute_single_agent(agent_name, prompt, output_path)
                     reports[agent_name] = output_path
-                    print(f"   ✅ {agent_name} 完成")
+                    print(f"   ✅ {agent_name} 完成 ({idx}/{total_agents})")
                 except Exception as e:
-                    print(f"   ❌ {agent_name} 失败: {e}")
+                    print(f"   ❌ {agent_name} 失败 ({idx}/{total_agents}): {e}")
 
         # 保存元数据
         self._save_metadata(output_dir.parent,
@@ -250,8 +255,6 @@ class ResearchOrchestrator:
         else:
             # codex exec 不需要 flag
             cmd = cli.split() + [prompt]
-
-        print(f"   🔄 {agent_name} 开始执行...")
 
         start_time = time.time()
 
