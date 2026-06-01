@@ -1,0 +1,46 @@
+# Agent 配置
+# 每个 agent 使用其默认模型，不传 --model 参数
+
+agents:
+  hermes:
+    cli: hermes
+    prompt_flag: -z
+    description: "Hermes Agent - 使用默认模型"
+    # 输出格式：纯文本，直接保存
+
+  codex:
+    cli: codex exec
+    prompt_flag: ""  # codex exec 直接接 prompt，不需要额外 flag
+    description: "OpenAI Codex - 使用默认模型 (gpt-5.5)"
+    # 输出格式：带元数据（workdir/model/tokens），但完整保存到 md
+
+  claude:
+    cli: claude
+    prompt_flag: -p
+    description: "Claude Code - 使用默认模型"
+    # 输出格式：纯文本，直接保存
+
+  gemini:
+    cli: gemini
+    prompt_flag: -p
+    description: "Google Gemini - 使用默认模型"
+    # 输出格式：纯文本，直接保存
+
+  agy:
+    cli: agy
+    prompt_flag: -p
+    description: "AntiGravity - 使用默认模型"
+    # 输出格式：纯文本，直接保存
+
+# 执行配置
+execution:
+  parallel: true          # 是否并行执行多个 agent
+  timeout: 600            # 单个 agent 超时时间（秒）
+  max_retries: 2          # 失败重试次数
+
+# 收敛配置
+convergence:
+  threshold: 0.85         # 收敛阈值（0.0-1.0）
+  max_rounds: 10          # 最大轮次
+  min_rounds: 2           # 最小轮次（至少跑完一次 research + comparison）
+  judge_agent: claude     # 用于评估收敛度的裁判 agent

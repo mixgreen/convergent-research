@@ -1,0 +1,13 @@
+{
+  "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
+  "name": "convergent-research",
+  "version": "0.1.0",
+  "description": "Multi-agent iterative research system with convergence detection",
+  "author": {
+    "name": "green",
+    "email": "1932225604@qq.com"
+  },
+  "skills": [
+    "./"
+  ]
+}
