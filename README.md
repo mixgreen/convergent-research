@@ -10,7 +10,7 @@ Convergent Research 是一个 Claude Code plugin，通过启动多个独立 AI a
 
 ### 核心特性
 
-- 🤖 **5 个独立 Agent**：hermes、codex、claude、gemini、agy 并行研究
+- 🤖 **4 个独立 Agent**：hermes、codex、claude、agy 并行研究
 - 🔄 **动态收敛循环**：自动检测结论一致性，达到阈值后终止
 - 📚 **统一参考资料**：第 2 轮自动提取并统一所有 agent 的参考资料
 - 📊 **完整元数据**：记录每个 agent 的 token 消耗、执行时间、退出码
@@ -23,8 +23,7 @@ Convergent Research 是一个 Claude Code plugin，通过启动多个独立 AI a
   ├─ hermes   → 报告 A
   ├─ codex    → 报告 B
   ├─ claude   → 报告 C
-  ├─ gemini   → 报告 D
-  └─ agy      → 报告 E
+  └─ agy      → 报告 D
 
 第 2 轮：对比评估
   ├─ 识别共识与分歧
@@ -149,7 +148,6 @@ convergence:
 - `hermes`：Hermes Agent CLI
 - `codex`：OpenAI Codex CLI
 - `claude`：Claude Code CLI
-- `gemini`：Google Gemini CLI
 - `agy`：AntiGravity CLI
 
 > 注：可以在 `agents/agents.yaml` 中删除未安装的 agent

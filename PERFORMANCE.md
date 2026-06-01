@@ -21,11 +21,11 @@
 
 ### 理论性能
 
-假设 5 个 agent 都成功，最慢的 agent 耗时 ~120 秒：
+假设 4 个 agent 都成功，最慢的 agent 耗时 ~120 秒：
 
-- **串行**：120 × 5 = 600 秒 (10 分钟)
+- **串行**：120 × 4 = 480 秒 (8 分钟)
 - **并行**：120 秒 (2 分钟)
-- **理论提升**：**~80%**
+- **理论提升**：**~75%**
 
 ### 实际测试中的问题
 
@@ -37,11 +37,10 @@
 | hermes | ✅ 成功 | 21.85s |
 | agy | ✅ 成功 | 17.74s |
 | codex | ❌ 失败 | "Not inside a trusted directory" |
-| gemini | ❌ 失败 | "not running in a trusted directory" |
 
 ### 解决方案
 
-对于 codex 和 gemini 的信任问题，用户需要：
+对于 codex 的信任问题，用户需要：
 
 **Codex**:
 ```bash
@@ -54,22 +53,13 @@ codex:
   prompt_flag: ""
 ```
 
-**Gemini**:
-```bash
-export GEMINI_CLI_TRUST_WORKSPACE=true
-```
-或在 `agents.yaml` 中修改：
-```yaml
-gemini:
-  cli: gemini --skip-trust
-  prompt_flag: -p
-```
-
 ### 结论
 
-✅ **并行优化成功**，在理想情况下可节省 **~80%** 时间。
+✅ **并行优化成功**，在理想情况下可节省 **~75%** 时间。
 ✅ **进度显示改进**，用户体验更好。
 ⚠️ 部分 agent 需要额外配置才能在非交互环境运行。
+
+> **注**：Gemini 已从默认配置中移除，未来将由 AntiGravity (agy) 取代。
 
 ---
 

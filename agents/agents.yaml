@@ -20,12 +20,6 @@ agents:
     description: "Claude Code - 使用默认模型"
     # 输出格式：纯文本，直接保存
 
-  gemini:
-    cli: gemini
-    prompt_flag: -p
-    description: "Google Gemini - 使用默认模型"
-    # 输出格式：纯文本，直接保存
-
   agy:
     cli: agy
     prompt_flag: -p

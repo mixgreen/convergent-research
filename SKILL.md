@@ -7,7 +7,7 @@ description: |
   - "multi-agent research <question>"
   - "iterative research with multiple agents"
   - "research <question> with convergence"
-  Launches 5 independent agents (hermes, codex, claude, gemini, agy) to research
+  Launches 4 independent agents (hermes, codex, claude, agy) to research
   the same question, then iteratively compares and refines until conclusions converge.
 ---
 
@@ -17,7 +17,7 @@ description: |
 
 ## 功能
 
-启动 5 个独立 agent（hermes、codex、claude、gemini、agy）对同一研究问题进行迭代研究：
+启动 4 个独立 agent（hermes、codex、claude、agy）对同一研究问题进行迭代研究：
 
 1. **第 1 轮**：各 agent 独立研究，生成初始报告
 2. **第 2 轮**：各 agent 对比所有报告，识别共识与分歧，提取统一参考资料
@@ -40,7 +40,7 @@ description: |
    - 提取输出目录（可选，默认 `./convergent_research_<timestamp>`）
 
 2. **确认执行**：
-   - 告知用户将启动 5 个 agent、可能耗时较长、消耗大量 token
+   - 告知用户将启动 4 个 agent、可能耗时较长、消耗大量 token
    - 显示预估轮次范围（2-10 轮）
    - 询问是否继续
 
@@ -69,7 +69,7 @@ description: |
 
 你应该：
 1. 确认问题和输出目录（默认 `./convergent_research_<timestamp>`）
-2. 告知用户将启动 5 个 agent（hermes/codex/claude/gemini/agy）
+2. 告知用户将启动 4 个 agent（hermes/codex/claude/agy）
 3. 调用 `orchestrator.py`
 4. 实时显示进度
 5. 完成后读取并展示最终报告的摘要
@@ -83,7 +83,6 @@ description: |
 │   │   ├── hermes.md
 │   │   ├── codex.md
 │   │   ├── claude.md
-│   │   ├── gemini.md
 │   │   ├── agy.md
 │   │   ├── hermes.meta.json      # token 消耗等元数据
 │   │   └── ...
