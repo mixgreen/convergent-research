@@ -19,9 +19,11 @@ build/
 .DS_Store
 Thumbs.db
 
-# Test outputs
+# Test outputs / 运行产物
 test_output/
+test_output_*/
 convergent_research_*/
+cache/
 
 # Logs
 *.log

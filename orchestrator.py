@@ -36,6 +36,9 @@ class ResearchOrchestrator:
         # 统一参考资料（第 2 轮后提取）
         self.unified_references = None
 
+        # Bug #3 修复：追踪成功的 agent
+        self.successful_agents = set(self.agents.keys())  # 初始假设所有 agent 可用
+
     def run(self, question: str) -> Path:
         """运行完整的研究流程，返回最终报告路径"""
         print(f"🚀 启动收敛研究系统")
@@ -161,26 +164,38 @@ class ResearchOrchestrator:
     def _run_refine_round(self, round_num: int, question: str,
                          prev_research_reports: Dict[str, str],
                          comparison_reports: Dict[str, str]) -> Dict[str, Path]:
-        """执行精炼轮次"""
+        """执行精炼轮次（Bug #1 修复：使用精简版模板）"""
         round_dir = self.output_dir / f"round_{round_num:02d}" / "refined"
         round_dir.mkdir(parents=True, exist_ok=True)
 
-        # 加载 prompt 模板
-        prompt_template = self._load_prompt_template("round_refine.md")
+        # Bug #1 修复：加载精简版 prompt 模板
+        prompt_template = self._load_prompt_template("round_refine_summary.md")
+
+        # Bug #1 修复：提取对比报告摘要
+        print("   📊 提取对比报告摘要...")
+        summary = self._extract_comparison_summary(comparison_reports)
 
         # 为每个 agent 生成个性化 prompt（包含它自己上一轮的报告）
         reports = {}
 
         for agent_name in self.agents.keys():
-            your_prev_report = prev_research_reports.get(agent_name, "（未找到你的上一轮报告）")
-            comparison_text = self._format_reports_for_prompt(comparison_reports)
+            # Bug #3 修复：跳过失败的 agent
+            if agent_name not in self.successful_agents:
+                continue
 
+            your_prev_report = prev_research_reports.get(agent_name, "（未找到你的上一轮报告）")
+            agent_feedback = summary['errors_to_fix'].get(agent_name, '（无明确错误指出）')
+
+            # Bug #1 修复：使用精简版变量
             prompt = prompt_template.format(
                 round_num=round_num,
                 prev_research_round=round_num - 2,
                 question=question,
                 your_previous_report=your_prev_report,
-                comparison_reports=comparison_text,
+                consensus_facts=summary['consensus_facts'],
+                agent_feedback=agent_feedback,
+                errors_to_fix=agent_feedback,
+                supplementary_angles=summary['supplementary_angles'],
                 unified_references=self.unified_references or "（尚未提取）"
             )
 
@@ -197,16 +212,19 @@ class ResearchOrchestrator:
 
     def _execute_agents(self, output_dir: Path, prompt: str,
                        phase: str) -> Dict[str, Path]:
-        """并行或串行执行所有 agent"""
+        """并行或串行执行所有 agent（Bug #3 修复：只执行成功的 agent）"""
         reports = {}
-        total_agents = len(self.agents)
+        failed_agents = []
+        # Bug #3 修复：只执行上一轮成功的 agent
+        agents_to_run = [a for a in self.agents.keys() if a in self.successful_agents]
+        total_agents = len(agents_to_run)
 
         if self.exec_config['parallel']:
             # 并行执行
             print(f"   🚀 并行启动 {total_agents} 个 agent...")
             with ThreadPoolExecutor(max_workers=total_agents) as executor:
                 futures = {}
-                for agent_name in self.agents.keys():
+                for agent_name in agents_to_run:
                     output_path = output_dir / f"{agent_name}_{phase}.md" if phase != "research" else output_dir / f"{agent_name}.md"
                     future = executor.submit(
                         self._execute_single_agent, agent_name, prompt, output_path
@@ -223,17 +241,25 @@ class ResearchOrchestrator:
                         print(f"   ✅ {agent_name} 完成 ({completed}/{total_agents})")
                     except Exception as e:
                         completed += 1
+                        failed_agents.append(agent_name)
                         print(f"   ❌ {agent_name} 失败 ({completed}/{total_agents}): {e}")
         else:
             # 串行执行
-            for idx, agent_name in enumerate(self.agents.keys(), 1):
+            for idx, agent_name in enumerate(agents_to_run, 1):
                 output_path = output_dir / f"{agent_name}_{phase}.md" if phase != "research" else output_dir / f"{agent_name}.md"
                 try:
                     self._execute_single_agent(agent_name, prompt, output_path)
                     reports[agent_name] = output_path
                     print(f"   ✅ {agent_name} 完成 ({idx}/{total_agents})")
                 except Exception as e:
+                    failed_agents.append(agent_name)
                     print(f"   ❌ {agent_name} 失败 ({idx}/{total_agents}): {e}")
+
+        # Bug #3 修复：从成功列表中移除失败的 agent
+        for agent in failed_agents:
+            if agent in self.successful_agents:
+                self.successful_agents.remove(agent)
+                print(f"   ⚠️  {agent} 从后续轮次中移除")
 
         # 保存元数据
         self._save_metadata(output_dir.parent,
@@ -243,8 +269,8 @@ class ResearchOrchestrator:
         return reports
 
     def _execute_single_agent(self, agent_name: str, prompt: str,
-                             output_path: Path) -> None:
-        """执行单个 agent"""
+                             output_path: Path, retry_count: int = 0) -> None:
+        """执行单个 agent（支持超时重试）"""
         agent_config = self.agents[agent_name]
         cli = agent_config['cli']
         prompt_flag = agent_config['prompt_flag']
@@ -285,14 +311,20 @@ class ResearchOrchestrator:
                     'elapsed_seconds': round(elapsed, 2),
                     'exit_code': result.returncode,
                     'tokens': tokens,
+                    'retry_count': retry_count,
                     'stderr': result.stderr[:500] if result.stderr else None  # 只保留前 500 字符
                 }, f, indent=2, ensure_ascii=False)
 
             if result.returncode != 0:
                 raise RuntimeError(f"Exit code {result.returncode}")
 
-        except subprocess.TimeoutExpired:
-            raise RuntimeError(f"Timeout after {self.exec_config['timeout']}s")
+        except subprocess.TimeoutExpired as e:
+            # Bug #2 修复：超时后重试
+            if retry_count < self.exec_config['max_retries']:
+                print(f"   ⚠️  {agent_name} 超时，重试 {retry_count + 1}/{self.exec_config['max_retries']}")
+                return self._execute_single_agent(agent_name, prompt, output_path, retry_count + 1)
+            else:
+                raise RuntimeError(f"Timeout after {self.exec_config['timeout']}s (max retries exceeded)")
         except Exception as e:
             raise RuntimeError(f"Execution failed: {e}")
 
@@ -404,6 +436,49 @@ class ResearchOrchestrator:
             print(f"   ✅ 提取了 {len(all_refs)} 条参考资料")
         else:
             print(f"   ⚠️  未提取到参考资料（可能是纯理论问题）")
+
+    def _extract_comparison_summary(self, comparison_reports: Dict[str, str]) -> Dict[str, str]:
+        """Bug #1 修复：从对比报告中提取摘要信息"""
+        summary = {
+            'consensus_facts': '',
+            'errors_to_fix': {},
+            'supplementary_angles': '',
+        }
+
+        # 从任一报告中提取共识部分（所有报告应该一致）
+        first_report = next(iter(comparison_reports.values()))
+
+        # 提取"已达成共识的事实"章节
+        if "## 2. 已达成共识的事实" in first_report:
+            section = first_report.split("## 2. 已达成共识的事实")[1]
+            section = section.split("##")[0]
+            summary['consensus_facts'] = section.strip()
+
+        # 提取"补充角度"章节
+        if "## 4. 补充角度" in first_report:
+            section = first_report.split("## 4. 补充角度")[1]
+            section = section.split("##")[0]
+            summary['supplementary_angles'] = section.strip()
+
+        # 为每个 agent 提取针对性反馈
+        for agent_name in comparison_reports.keys():
+            agent_feedback = []
+
+            # 在所有报告中查找提到该 agent 的分歧和错误
+            for report in comparison_reports.values():
+                # 查找分歧点章节
+                if "## 3. 分歧点分析" in report:
+                    section = report.split("## 3. 分歧点分析")[1]
+                    section = section.split("##")[0]
+
+                    # 简单启发式：查找包含该 agent 名称的段落
+                    for para in section.split('\n\n'):
+                        if agent_name in para:
+                            agent_feedback.append(para.strip())
+
+            summary['errors_to_fix'][agent_name] = '\n\n'.join(agent_feedback) if agent_feedback else '（无明确错误指出）'
+
+        return summary
 
     def _evaluate_convergence(self, round_num: int,
                              comparison_reports: Dict[str, Path]) -> Dict:
