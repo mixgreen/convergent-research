@@ -45,6 +45,10 @@ def prompt_dir(tmp_path):
         "补充:{supplementary_angles} 参考:{unified_references}",
         encoding="utf-8",
     )
+    (d / "authoritative.md").write_text(
+        "权威 {last_round}轮 {num_agents}agent 问题:{question}\n{reports}",
+        encoding="utf-8",
+    )
     return d
 
 
@@ -176,3 +180,23 @@ class TestLoadReports:
         loaded = executor.load_reports(2)
         assert set(loaded.keys()) == {"alpha", "beta"}
         assert "comparison 报告" in loaded["alpha"]
+
+
+# ---------- run_authoritative ----------
+
+class TestRunAuthoritative:
+    def test_generates_final_report(self, executor, mock_runner, output_dir):
+        # 先造一轮报告供加载
+        executor.run_research(1, "q")
+        path = executor.run_authoritative("什么是DMA", last_round=1, judge_agent="alpha")
+        assert path == output_dir / "authoritative" / "final_report.md"
+        assert path.exists()
+
+    def test_prompt_includes_reports_and_counts(self, executor, mock_runner):
+        executor.run_research(1, "q")
+        executor.run_authoritative("什么是DMA", last_round=1, judge_agent="alpha")
+        single = [p for ph, p in mock_runner.captured_prompts if ph == "single"][-1]
+        assert "什么是DMA" in single
+        assert "2agent" in single  # alpha + beta 的报告数
+        assert "research 报告" in single  # 报告内容被拼入
+

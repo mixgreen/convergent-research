@@ -208,11 +208,36 @@ convergent-research/
 ├── prompts/
 │   ├── round_research.md        # 研究 prompt 模板
 │   ├── round_comparison.md      # 对比 prompt 模板
-│   └── round_refine.md          # 精炼 prompt 模板
-├── orchestrator.py              # 核心编排器
+│   ├── round_refine_summary.md  # 精炼 prompt 模板（精简版）
+│   └── authoritative.md         # 权威报告 prompt 模板
+├── orchestrator.py              # ResearchCoordinator：主循环 + 收敛判定
+├── agent_runner.py              # AgentRunner：执行（并行/重试/失败追踪）
+├── report_parser.py             # ReportParser：纯解析（text → data）
+├── round_executor.py            # RoundExecutor：单轮执行（模板→prompt→调度→落盘）
+├── tests/                       # 单元测试（pytest，49 个）
+│   ├── test_agent_runner.py
+│   ├── test_report_parser.py
+│   └── test_round_executor.py
 ├── SKILL.md                     # Skill 入口文档
 ├── README.md                    # 本文件
 └── LICENSE                      # MIT License
+```
+
+### 架构
+
+入口 `orchestrator.py` 中的 `ResearchCoordinator` 只负责编排——主循环、
+收敛判定、统一参考资料落盘。执行细节分散在三个深度模块，各自可独立测试：
+
+| 模块 | 职责 | 接口要点 |
+|------|------|---------|
+| `AgentRunner` | agent 执行 | 并行/串行、超时重试、失败 agent 追踪 |
+| `ReportParser` | 报告解析（纯函数） | text→data，无 I/O、无状态 |
+| `RoundExecutor` | 单轮执行 | 模板加载→prompt 构造→agent 调度→元数据落盘 |
+
+运行测试：
+
+```bash
+python3 -m pytest tests/ -q
 ```
 
 ### 添加新 Agent

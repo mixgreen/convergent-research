@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
 """
-Convergent Research Orchestrator
-多智能体迭代研究编排器，支持动态收敛检测
+Convergent Research Coordinator
+多智能体迭代研究协调器：只负责主循环、收敛判定与最终报告调度。
+
+执行细节分散在三个深度模块：
+- AgentRunner    : agent 执行（并行/重试/失败追踪）
+- ReportParser   : 报告解析（纯函数 text→data）
+- RoundExecutor  : 单轮执行（模板→prompt→调度→落盘）
 """
 
 import sys
@@ -9,14 +14,16 @@ import json
 import yaml
 from pathlib import Path
 from datetime import datetime
-from typing import Dict, Optional
+from typing import Dict
 
 from agent_runner import AgentRunner
 from report_parser import ReportParser
 from round_executor import RoundExecutor
 
 
-class ResearchOrchestrator:
+class ResearchCoordinator:
+    """协调器：编排轮次序列、判定收敛、生成权威报告。"""
+
     def __init__(self, config_path: Path, output_dir: Path):
         self.config_path = config_path
         self.output_dir = Path(output_dir)
@@ -137,7 +144,12 @@ class ResearchOrchestrator:
         print(f"\n{'='*60}")
         print(f"生成最终权威报告")
         print(f"{'='*60}")
-        final_report = self._generate_authoritative_report(question)
+        last_round = max(
+            int(d.name.split('_')[1]) for d in self.output_dir.glob("round_*")
+        )
+        final_report = self.round_executor.run_authoritative(
+            question, last_round, self.conv_config['judge_agent']
+        )
 
         print(f"\n✅ 研究完成！")
         print(f"📄 最终报告: {final_report}")
@@ -145,16 +157,21 @@ class ResearchOrchestrator:
 
         return final_report
 
+    @staticmethod
+    def _read_texts(reports: Dict[str, Path]) -> Dict[str, str]:
+        """把 {agent: path} 读成 {agent: text}"""
+        return {
+            name: Path(p).read_text(encoding="utf-8")
+            for name, p in reports.items()
+        }
+
     def _extract_unified_references(self, comparison_reports: Dict[str, Path]) -> None:
         """提取统一参考资料并写入文件（解析委托给 ReportParser）"""
         print("   📚 提取统一参考资料...")
 
-        # 读取文件内容，解析交给纯解析器
-        report_texts = {
-            name: Path(p).read_text(encoding="utf-8")
-            for name, p in comparison_reports.items()
-        }
-        all_refs = self.report_parser.extract_references(report_texts)
+        all_refs = self.report_parser.extract_references(
+            self._read_texts(comparison_reports)
+        )
 
         # 保存统一参考资料
         refs_path = self.output_dir / "round_02" / "unified_references.md"
@@ -179,12 +196,9 @@ class ResearchOrchestrator:
         """评估收敛度（分数提取委托给 ReportParser，状态判定保留为策略）"""
         print("   🔍 评估收敛度...")
 
-        # 读取文件内容，分数提取交给纯解析器
-        report_texts = {
-            name: Path(p).read_text(encoding="utf-8")
-            for name, p in comparison_reports.items()
-        }
-        scores = self.report_parser.extract_convergence_scores(report_texts)
+        scores = self.report_parser.extract_convergence_scores(
+            self._read_texts(comparison_reports)
+        )
 
         # 计算平均分数
         avg_score = sum(scores) / len(scores) if scores else 0.0
@@ -211,61 +225,6 @@ class ResearchOrchestrator:
         with open(log_path, 'w', encoding='utf-8') as f:
             json.dump(self.convergence_log, f, indent=2, ensure_ascii=False)
 
-    def _generate_authoritative_report(self, question: str) -> Path:
-        """生成最终权威报告"""
-        auth_dir = self.output_dir / "authoritative"
-        auth_dir.mkdir(exist_ok=True)
-
-        # 找到最后一轮的报告
-        last_round = max([
-            int(d.name.split('_')[1])
-            for d in self.output_dir.glob("round_*")
-        ])
-
-        final_reports = self.round_executor.load_reports(last_round)
-
-        # 使用裁判 agent 生成权威报告
-        judge_agent = self.conv_config['judge_agent']
-
-        prompt = f"""
-你是一个技术报告编辑专家。以下是经过 {last_round} 轮迭代后，{len(final_reports)} 个 agent
-对同一研究问题的最终报告。这些报告已经过多轮对比和精炼，达到了收敛状态。
-
-请基于这些报告，生成一份**权威版研究报告**，要求：
-
-1. **合并共识**：提取所有 agent 都同意的核心结论
-2. **解决分歧**：如果仍有分歧，基于源码引用的可靠性判断，选择最可信的结论
-3. **标注来源**：每个关键结论都标注"经 X 个 agent 验证"或"基于 agent Y 的发现"
-4. **完整性**：覆盖所有 agent 提出的有价值角度
-5. **可读性**：结构清晰，适合作为最终交付文档
-
-## 研究问题
-
-{question}
-
-## 各 Agent 的最终报告
-
-{self.report_parser.format_for_prompt(final_reports)}
-
----
-
-## 输出格式
-
-生成一份完整的 Markdown 研究报告，包含：
-- 标题：在原问题基础上加"—— 权威版"
-- 状态说明：注明"经 {last_round} 轮迭代、{len(final_reports)} 个 agent 收敛验证"
-- 完整的研究内容（结论速览、详细分析、核心结论、参考资料）
-- 附录：与原始报告的差异说明、收敛历史
-
-开始生成权威报告：
-"""
-
-        output_path = auth_dir / "final_report.md"
-        print(f"   🤖 使用 {judge_agent} 生成权威报告...")
-        self.agent_runner.run_single_agent(judge_agent, prompt, output_path)
-
-        return output_path
-
 
 def main():
     if len(sys.argv) < 3:
@@ -279,8 +238,8 @@ def main():
     script_dir = Path(__file__).parent
     config_path = script_dir / "agents" / "agents.yaml"
 
-    orchestrator = ResearchOrchestrator(config_path, output_dir)
-    orchestrator.run(question)
+    coordinator = ResearchCoordinator(config_path, output_dir)
+    coordinator.run(question)
 
 
 if __name__ == "__main__":

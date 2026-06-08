@@ -115,6 +115,36 @@ class RoundExecutor:
                             list(reports.values()))
         return reports
 
+    def run_authoritative(self, question: str, last_round: int,
+                          judge_agent: str) -> Path:
+        """最终步：用裁判 agent 把收敛后的报告合并成权威版
+
+        Args:
+            question: 研究问题
+            last_round: 最后一轮编号（用于加载报告 + 文案）
+            judge_agent: 负责合并的 agent 名称
+
+        Returns:
+            权威报告路径 authoritative/final_report.md
+        """
+        auth_dir = self.output_dir / "authoritative"
+        auth_dir.mkdir(exist_ok=True)
+
+        final_reports = self.load_reports(last_round)
+
+        prompt_template = self._load_prompt_template("authoritative.md")
+        prompt = prompt_template.format(
+            question=question,
+            last_round=last_round,
+            num_agents=len(final_reports),
+            reports=self.report_parser.format_for_prompt(final_reports),
+        )
+
+        output_path = auth_dir / "final_report.md"
+        print(f"   🤖 使用 {judge_agent} 生成权威报告...")
+        self.agent_runner.run_single_agent(judge_agent, prompt, output_path)
+        return output_path
+
     # ---------- 报告加载 ----------
 
     def load_reports(self, round_num: int) -> Dict[str, str]:

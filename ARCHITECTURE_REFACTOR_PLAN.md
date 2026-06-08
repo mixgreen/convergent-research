@@ -238,17 +238,25 @@ class ResearchCoordinator:
 - [x] 添加单元测试 `tests/test_round_executor.py`（10 个测试，mock AgentRunner）
 - [x] orchestrator.py: 433 → 287 行
 
-**第 4 步: 简化 ResearchCoordinator**
-- [ ] 将 `ResearchOrchestrator` 重命名为 `ResearchCoordinator`
-- [ ] 移除已迁移的方法
-- [ ] 只保留主循环和收敛判定
-- [ ] 目标：类长度从 628 行降至 <150 行
+**第 4 步: 简化 ResearchCoordinator（已完成 ✅）**
+- [x] `ResearchOrchestrator` 重命名为 `ResearchCoordinator`（文件名仍 orchestrator.py，SKILL.md 入口不变）
+- [x] 权威报告生成移入 `RoundExecutor.run_authoritative`，prompt 抽成 `prompts/authoritative.md`
+- [x] 抽 `_read_texts` 辅助消除两处重复的 path→text 读取
+- [x] 清理未使用导入（List/Tuple/Optional）
+- [x] 协调器只剩：主循环、收敛判定（依赖阈值的策略）、统一参考资料落盘
+- [x] 新增 2 个测试（run_authoritative），合计 49 个全过
+- [x] orchestrator.py: 287 → 246 行（628 → 246，降幅 61%）
 
-**第 5 步: 补充测试与文档**
-- [ ] 集成测试：端到端流程验证
-- [ ] 性能测试：确保重构后性能无退化
-- [ ] 更新 README 说明新架构
-- [ ] 更新 SKILL.md
+**第 5 步: 补充测试与文档（已完成 ✅）**
+- [x] 集成测试 `tests/test_integration.py`：端到端 4 模块协作（mock subprocess，5 个用例）
+  - 高分立即收敛 + 生成权威报告
+  - 低分进入精炼轮
+  - 统一参考资料提取
+  - 失败 agent 不阻断流程（Bug #3 跨模块验证）
+  - 收敛日志落盘
+- [x] 更新 README 项目结构 + 新增「架构」章节（模块职责表 + 测试命令）
+- [x] SKILL.md 入口不变（仍 `orchestrator.py`，无需改）
+- [x] 全套测试 54 个用例（17 + 20 + 12 + 5），0.09s 全过
 
 #### 成功标准
 
