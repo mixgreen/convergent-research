@@ -4,16 +4,16 @@ Convergent Research Orchestrator
 多智能体迭代研究编排器，支持动态收敛检测
 """
 
-import os
 import sys
 import json
 import yaml
-import subprocess
-import time
 from pathlib import Path
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Dict, Optional
+
+from agent_runner import AgentRunner
+from report_parser import ReportParser
+from round_executor import RoundExecutor
 
 
 class ResearchOrchestrator:
@@ -36,8 +36,29 @@ class ResearchOrchestrator:
         # 统一参考资料（第 2 轮后提取）
         self.unified_references = None
 
-        # Bug #3 修复：追踪成功的 agent
-        self.successful_agents = set(self.agents.keys())  # 初始假设所有 agent 可用
+        # Agent 执行器（封装并行/重试/失败追踪）
+        self.agent_runner = AgentRunner(
+            agents=self.agents,
+            exec_config=self.exec_config,
+            output_dir=self.output_dir,
+        )
+
+        # 报告解析器（纯解析：text in / data out）
+        self.report_parser = ReportParser()
+
+        # 轮次执行器（模板加载 + prompt 构造 + agent 调度 + 元数据落盘）
+        self.round_executor = RoundExecutor(
+            agent_runner=self.agent_runner,
+            report_parser=self.report_parser,
+            agents=self.agents,
+            prompt_dir=self.config_path.parent.parent / "prompts",
+            output_dir=self.output_dir,
+        )
+
+    @property
+    def successful_agents(self):
+        """委托给 AgentRunner 的成功 agent 追踪（Bug #3 修复）"""
+        return self.agent_runner.successful_agents
 
     def run(self, question: str) -> Path:
         """运行完整的研究流程，返回最终报告路径"""
@@ -54,7 +75,7 @@ class ResearchOrchestrator:
         print(f"{'='*60}")
         print(f"第 {round_num} 轮：独立研究")
         print(f"{'='*60}")
-        reports_r1 = self._run_research_round(round_num, question)
+        reports_r1 = self.round_executor.run_research(round_num, question)
 
         # 开始迭代循环
         while round_num < self.conv_config['max_rounds']:
@@ -67,9 +88,9 @@ class ResearchOrchestrator:
                 print(f"{'='*60}")
 
                 prev_round = round_num - 1
-                prev_reports = self._load_reports(prev_round)
+                prev_reports = self.round_executor.load_reports(prev_round)
 
-                comparison_reports = self._run_comparison_round(
+                comparison_reports = self.round_executor.run_comparison(
                     round_num, question, prev_reports
                 )
 
@@ -103,12 +124,13 @@ class ResearchOrchestrator:
                 comparison_round = round_num - 1
                 prev_research_round = round_num - 2
 
-                comparison_reports = self._load_reports(comparison_round)
-                prev_research_reports = self._load_reports(prev_research_round)
+                comparison_reports = self.round_executor.load_reports(comparison_round)
+                prev_research_reports = self.round_executor.load_reports(prev_research_round)
 
-                refined_reports = self._run_refine_round(
+                refined_reports = self.round_executor.run_refine(
                     round_num, question,
-                    prev_research_reports, comparison_reports
+                    prev_research_reports, comparison_reports,
+                    self.unified_references,
                 )
 
         # 生成最终权威报告
@@ -123,301 +145,16 @@ class ResearchOrchestrator:
 
         return final_report
 
-    def _run_research_round(self, round_num: int, question: str) -> Dict[str, Path]:
-        """执行研究轮次"""
-        round_dir = self.output_dir / f"round_{round_num:02d}" / "research"
-        round_dir.mkdir(parents=True, exist_ok=True)
-
-        # 加载 prompt 模板
-        prompt_template = self._load_prompt_template("round_research.md")
-        prompt = prompt_template.format(question=question)
-
-        # 执行所有 agent
-        reports = self._execute_agents(round_dir, prompt, "research")
-
-        return reports
-
-    def _run_comparison_round(self, round_num: int, question: str,
-                             prev_reports: Dict[str, str]) -> Dict[str, Path]:
-        """执行对比评估轮次"""
-        round_dir = self.output_dir / f"round_{round_num:02d}" / "comparison"
-        round_dir.mkdir(parents=True, exist_ok=True)
-
-        # 加载 prompt 模板
-        prompt_template = self._load_prompt_template("round_comparison.md")
-
-        # 格式化上一轮的报告
-        reports_text = self._format_reports_for_prompt(prev_reports)
-
-        prompt = prompt_template.format(
-            round_num=round_num,
-            num_agents=len(prev_reports),
-            question=question,
-            reports=reports_text
-        )
-
-        # 执行所有 agent
-        reports = self._execute_agents(round_dir, prompt, "comparison")
-
-        return reports
-
-    def _run_refine_round(self, round_num: int, question: str,
-                         prev_research_reports: Dict[str, str],
-                         comparison_reports: Dict[str, str]) -> Dict[str, Path]:
-        """执行精炼轮次（Bug #1 修复：使用精简版模板）"""
-        round_dir = self.output_dir / f"round_{round_num:02d}" / "refined"
-        round_dir.mkdir(parents=True, exist_ok=True)
-
-        # Bug #1 修复：加载精简版 prompt 模板
-        prompt_template = self._load_prompt_template("round_refine_summary.md")
-
-        # Bug #1 修复：提取对比报告摘要
-        print("   📊 提取对比报告摘要...")
-        summary = self._extract_comparison_summary(comparison_reports)
-
-        # 为每个 agent 生成个性化 prompt（包含它自己上一轮的报告）
-        reports = {}
-
-        for agent_name in self.agents.keys():
-            # Bug #3 修复：跳过失败的 agent
-            if agent_name not in self.successful_agents:
-                continue
-
-            your_prev_report = prev_research_reports.get(agent_name, "（未找到你的上一轮报告）")
-            agent_feedback = summary['errors_to_fix'].get(agent_name, '（无明确错误指出）')
-
-            # Bug #1 修复：使用精简版变量
-            prompt = prompt_template.format(
-                round_num=round_num,
-                prev_research_round=round_num - 2,
-                question=question,
-                your_previous_report=your_prev_report,
-                consensus_facts=summary['consensus_facts'],
-                agent_feedback=agent_feedback,
-                errors_to_fix=agent_feedback,
-                supplementary_angles=summary['supplementary_angles'],
-                unified_references=self.unified_references or "（尚未提取）"
-            )
-
-            # 单独执行该 agent
-            output_path = round_dir / f"{agent_name}_refined.md"
-            self._execute_single_agent(agent_name, prompt, output_path)
-            reports[agent_name] = output_path
-
-        # 保存元数据
-        self._save_metadata(round_dir.parent, round_num, "refined",
-                           list(reports.values()))
-
-        return reports
-
-    def _execute_agents(self, output_dir: Path, prompt: str,
-                       phase: str) -> Dict[str, Path]:
-        """并行或串行执行所有 agent（Bug #3 修复：只执行成功的 agent）"""
-        reports = {}
-        failed_agents = []
-        # Bug #3 修复：只执行上一轮成功的 agent
-        agents_to_run = [a for a in self.agents.keys() if a in self.successful_agents]
-        total_agents = len(agents_to_run)
-
-        if self.exec_config['parallel']:
-            # 并行执行
-            print(f"   🚀 并行启动 {total_agents} 个 agent...")
-            with ThreadPoolExecutor(max_workers=total_agents) as executor:
-                futures = {}
-                for agent_name in agents_to_run:
-                    output_path = output_dir / f"{agent_name}_{phase}.md" if phase != "research" else output_dir / f"{agent_name}.md"
-                    future = executor.submit(
-                        self._execute_single_agent, agent_name, prompt, output_path
-                    )
-                    futures[future] = (agent_name, output_path)
-
-                completed = 0
-                for future in as_completed(futures):
-                    agent_name, output_path = futures[future]
-                    try:
-                        future.result()
-                        reports[agent_name] = output_path
-                        completed += 1
-                        print(f"   ✅ {agent_name} 完成 ({completed}/{total_agents})")
-                    except Exception as e:
-                        completed += 1
-                        failed_agents.append(agent_name)
-                        print(f"   ❌ {agent_name} 失败 ({completed}/{total_agents}): {e}")
-        else:
-            # 串行执行
-            for idx, agent_name in enumerate(agents_to_run, 1):
-                output_path = output_dir / f"{agent_name}_{phase}.md" if phase != "research" else output_dir / f"{agent_name}.md"
-                try:
-                    self._execute_single_agent(agent_name, prompt, output_path)
-                    reports[agent_name] = output_path
-                    print(f"   ✅ {agent_name} 完成 ({idx}/{total_agents})")
-                except Exception as e:
-                    failed_agents.append(agent_name)
-                    print(f"   ❌ {agent_name} 失败 ({idx}/{total_agents}): {e}")
-
-        # Bug #3 修复：从成功列表中移除失败的 agent
-        for agent in failed_agents:
-            if agent in self.successful_agents:
-                self.successful_agents.remove(agent)
-                print(f"   ⚠️  {agent} 从后续轮次中移除")
-
-        # 保存元数据
-        self._save_metadata(output_dir.parent,
-                           int(output_dir.parent.name.split('_')[1]),
-                           phase, list(reports.values()))
-
-        return reports
-
-    def _execute_single_agent(self, agent_name: str, prompt: str,
-                             output_path: Path, retry_count: int = 0) -> None:
-        """执行单个 agent（支持超时重试）"""
-        agent_config = self.agents[agent_name]
-        cli = agent_config['cli']
-        prompt_flag = agent_config['prompt_flag']
-
-        # 构建命令
-        if prompt_flag:
-            cmd = [cli, prompt_flag, prompt]
-        else:
-            # codex exec 不需要 flag
-            cmd = cli.split() + [prompt]
-
-        start_time = time.time()
-
-        try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=self.exec_config['timeout'],
-                cwd=os.getcwd()  # 在当前工作目录执行，让 agent 能访问项目文件
-            )
-
-            elapsed = time.time() - start_time
-
-            # 保存完整输出（包括元数据）
-            with open(output_path, 'w', encoding='utf-8') as f:
-                f.write(result.stdout)
-
-            # 提取 token 信息（如果有）
-            tokens = self._extract_token_info(result.stdout, result.stderr)
-
-            # 保存执行元数据
-            meta_path = output_path.with_suffix('.meta.json')
-            with open(meta_path, 'w', encoding='utf-8') as f:
-                json.dump({
-                    'agent': agent_name,
-                    'timestamp': datetime.now().isoformat(),
-                    'elapsed_seconds': round(elapsed, 2),
-                    'exit_code': result.returncode,
-                    'tokens': tokens,
-                    'retry_count': retry_count,
-                    'stderr': result.stderr[:500] if result.stderr else None  # 只保留前 500 字符
-                }, f, indent=2, ensure_ascii=False)
-
-            if result.returncode != 0:
-                raise RuntimeError(f"Exit code {result.returncode}")
-
-        except subprocess.TimeoutExpired as e:
-            # Bug #2 修复：超时后重试
-            if retry_count < self.exec_config['max_retries']:
-                print(f"   ⚠️  {agent_name} 超时，重试 {retry_count + 1}/{self.exec_config['max_retries']}")
-                return self._execute_single_agent(agent_name, prompt, output_path, retry_count + 1)
-            else:
-                raise RuntimeError(f"Timeout after {self.exec_config['timeout']}s (max retries exceeded)")
-        except Exception as e:
-            raise RuntimeError(f"Execution failed: {e}")
-
-    def _extract_token_info(self, stdout: str, stderr: str) -> Optional[Dict]:
-        """从输出中提取 token 信息（尽力而为）"""
-        # TODO: 针对不同 agent 的输出格式解析 token 信息
-        # codex: "tokens used\n18,906"
-        # 其他 agent 可能在 stderr 或特定格式中
-        tokens = {}
-
-        # 简单示例：查找 "tokens used" 行
-        for line in (stdout + '\n' + stderr).split('\n'):
-            if 'tokens' in line.lower() or 'token' in line.lower():
-                # 尝试提取数字
-                import re
-                numbers = re.findall(r'\d[\d,]*', line)
-                if numbers:
-                    tokens['raw'] = line.strip()
-                    break
-
-        return tokens if tokens else None
-
-    def _load_reports(self, round_num: int) -> Dict[str, str]:
-        """加载指定轮次的所有报告内容"""
-        round_dir = self.output_dir / f"round_{round_num:02d}"
-        reports = {}
-
-        # 确定子目录（research / comparison / refined）
-        if (round_dir / "research").exists():
-            subdir = round_dir / "research"
-        elif (round_dir / "comparison").exists():
-            subdir = round_dir / "comparison"
-        elif (round_dir / "refined").exists():
-            subdir = round_dir / "refined"
-        else:
-            return reports
-
-        for agent_name in self.agents.keys():
-            # 尝试多种文件名模式
-            patterns = [
-                f"{agent_name}.md",
-                f"{agent_name}_*.md"
-            ]
-
-            for pattern in patterns:
-                files = list(subdir.glob(pattern))
-                if files:
-                    with open(files[0], 'r', encoding='utf-8') as f:
-                        reports[agent_name] = f.read()
-                    break
-
-        return reports
-
-    def _format_reports_for_prompt(self, reports: Dict[str, str]) -> str:
-        """格式化报告用于 prompt"""
-        formatted = []
-        for agent_name, content in reports.items():
-            formatted.append(f"### Agent: {agent_name}\n\n{content}\n\n---\n")
-        return "\n".join(formatted)
-
     def _extract_unified_references(self, comparison_reports: Dict[str, Path]) -> None:
-        """从第一次对比报告中提取统一参考资料"""
+        """提取统一参考资料并写入文件（解析委托给 ReportParser）"""
         print("   📚 提取统一参考资料...")
 
-        # 读取所有对比报告
-        all_refs = set()
-        for report_path in comparison_reports.values():
-            with open(report_path, 'r', encoding='utf-8') as f:
-                content = f.read()
-                # 尝试多种章节标题格式
-                section_markers = [
-                    "## 5. 统一参考资料清单",
-                    "## 统一参考资料清单",
-                    "## 5. 参考资料",
-                    "## 参考资料"
-                ]
-
-                section = None
-                for marker in section_markers:
-                    if marker in content:
-                        section = content.split(marker)[1]
-                        section = section.split("##")[0]  # 到下一个章节为止
-                        break
-
-                if section:
-                    # 提取列表项
-                    for line in section.split('\n'):
-                        line = line.strip()
-                        if line.startswith('-') or line.startswith('*'):
-                            ref = line[1:].strip()
-                            # 过滤掉空行和分隔符
-                            if ref and ref not in ['--', '---', '...']:
-                                all_refs.add(ref)
+        # 读取文件内容，解析交给纯解析器
+        report_texts = {
+            name: Path(p).read_text(encoding="utf-8")
+            for name, p in comparison_reports.items()
+        }
+        all_refs = self.report_parser.extract_references(report_texts)
 
         # 保存统一参考资料
         refs_path = self.output_dir / "round_02" / "unified_references.md"
@@ -425,7 +162,7 @@ class ResearchOrchestrator:
             f.write("# 统一参考资料清单\n\n")
             f.write("（从第 2 轮对比报告中提取，供后续轮次使用）\n\n")
             if all_refs:
-                for ref in sorted(all_refs):
+                for ref in all_refs:
                     f.write(f"- {ref}\n")
             else:
                 f.write("（本轮未提取到参考资料，可能是纯理论问题或 agent 未在对比报告中列出参考资料）\n")
@@ -437,73 +174,22 @@ class ResearchOrchestrator:
         else:
             print(f"   ⚠️  未提取到参考资料（可能是纯理论问题）")
 
-    def _extract_comparison_summary(self, comparison_reports: Dict[str, str]) -> Dict[str, str]:
-        """Bug #1 修复：从对比报告中提取摘要信息"""
-        summary = {
-            'consensus_facts': '',
-            'errors_to_fix': {},
-            'supplementary_angles': '',
-        }
-
-        # 从任一报告中提取共识部分（所有报告应该一致）
-        first_report = next(iter(comparison_reports.values()))
-
-        # 提取"已达成共识的事实"章节
-        if "## 2. 已达成共识的事实" in first_report:
-            section = first_report.split("## 2. 已达成共识的事实")[1]
-            section = section.split("##")[0]
-            summary['consensus_facts'] = section.strip()
-
-        # 提取"补充角度"章节
-        if "## 4. 补充角度" in first_report:
-            section = first_report.split("## 4. 补充角度")[1]
-            section = section.split("##")[0]
-            summary['supplementary_angles'] = section.strip()
-
-        # 为每个 agent 提取针对性反馈
-        for agent_name in comparison_reports.keys():
-            agent_feedback = []
-
-            # 在所有报告中查找提到该 agent 的分歧和错误
-            for report in comparison_reports.values():
-                # 查找分歧点章节
-                if "## 3. 分歧点分析" in report:
-                    section = report.split("## 3. 分歧点分析")[1]
-                    section = section.split("##")[0]
-
-                    # 简单启发式：查找包含该 agent 名称的段落
-                    for para in section.split('\n\n'):
-                        if agent_name in para:
-                            agent_feedback.append(para.strip())
-
-            summary['errors_to_fix'][agent_name] = '\n\n'.join(agent_feedback) if agent_feedback else '（无明确错误指出）'
-
-        return summary
-
     def _evaluate_convergence(self, round_num: int,
                              comparison_reports: Dict[str, Path]) -> Dict:
-        """评估收敛度"""
+        """评估收敛度（分数提取委托给 ReportParser，状态判定保留为策略）"""
         print("   🔍 评估收敛度...")
 
-        # 读取所有对比报告的"收敛度自评"章节
-        scores = []
-        for agent_name, report_path in comparison_reports.items():
-            with open(report_path, 'r', encoding='utf-8') as f:
-                content = f.read()
-                # 查找 "收敛分数" 行
-                for line in content.split('\n'):
-                    if '收敛分数' in line or 'convergence' in line.lower():
-                        # 尝试提取 0.0-1.0 的数字
-                        import re
-                        match = re.search(r'0\.\d+|1\.0', line)
-                        if match:
-                            scores.append(float(match.group()))
-                            break
+        # 读取文件内容，分数提取交给纯解析器
+        report_texts = {
+            name: Path(p).read_text(encoding="utf-8")
+            for name, p in comparison_reports.items()
+        }
+        scores = self.report_parser.extract_convergence_scores(report_texts)
 
         # 计算平均分数
         avg_score = sum(scores) / len(scores) if scores else 0.0
 
-        # 判断状态
+        # 判断状态（依赖配置阈值，属于编排策略，保留在此）
         if avg_score >= self.conv_config['threshold']:
             status = "converged"
         elif round_num >= self.conv_config['max_rounds']:
@@ -525,27 +211,6 @@ class ResearchOrchestrator:
         with open(log_path, 'w', encoding='utf-8') as f:
             json.dump(self.convergence_log, f, indent=2, ensure_ascii=False)
 
-    def _save_metadata(self, round_dir: Path, round_num: int,
-                      phase: str, report_paths: List[Path]) -> None:
-        """保存轮次元数据"""
-        meta_path = round_dir / "metadata.json"
-
-        # 汇总所有 agent 的 token 信息
-        agents_meta = {}
-        for report_path in report_paths:
-            meta_file = report_path.with_suffix('.meta.json')
-            if meta_file.exists():
-                with open(meta_file, 'r', encoding='utf-8') as f:
-                    agents_meta[report_path.stem] = json.load(f)
-
-        with open(meta_path, 'w', encoding='utf-8') as f:
-            json.dump({
-                'round': round_num,
-                'phase': phase,
-                'timestamp': datetime.now().isoformat(),
-                'agents': agents_meta
-            }, f, indent=2, ensure_ascii=False)
-
     def _generate_authoritative_report(self, question: str) -> Path:
         """生成最终权威报告"""
         auth_dir = self.output_dir / "authoritative"
@@ -557,7 +222,7 @@ class ResearchOrchestrator:
             for d in self.output_dir.glob("round_*")
         ])
 
-        final_reports = self._load_reports(last_round)
+        final_reports = self.round_executor.load_reports(last_round)
 
         # 使用裁判 agent 生成权威报告
         judge_agent = self.conv_config['judge_agent']
@@ -580,7 +245,7 @@ class ResearchOrchestrator:
 
 ## 各 Agent 的最终报告
 
-{self._format_reports_for_prompt(final_reports)}
+{self.report_parser.format_for_prompt(final_reports)}
 
 ---
 
@@ -597,15 +262,9 @@ class ResearchOrchestrator:
 
         output_path = auth_dir / "final_report.md"
         print(f"   🤖 使用 {judge_agent} 生成权威报告...")
-        self._execute_single_agent(judge_agent, prompt, output_path)
+        self.agent_runner.run_single_agent(judge_agent, prompt, output_path)
 
         return output_path
-
-    def _load_prompt_template(self, filename: str) -> str:
-        """加载 prompt 模板"""
-        template_path = self.config_path.parent.parent / "prompts" / filename
-        with open(template_path, 'r', encoding='utf-8') as f:
-            return f.read()
 
 
 def main():
